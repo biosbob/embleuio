@@ -2,6 +2,9 @@
 
 import { BleuIO } from '../src/BleuIO'
 
+const DON_ADDR = '40:48:FD:EB:AA:5D'
+const EMS_ADDR = 'AA:AA:AA:AA:AA:AA'
+
 async function main() {
     const central = await BleuIO.open('COM18')
 
@@ -11,7 +14,7 @@ async function main() {
 
         const t0 = Date.now()
 
-        const hit = await central.scanUntilAddress('AA:AA:AA:AA:AA:AA', {
+        const hit = await central.scanUntilAddress(DON_ADDR, {
             scanSeconds: 3
         })
 
