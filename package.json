@@ -1,0 +1,21 @@
+{
+    "name": "@em-foundation/bleuio",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "dist/BlueIO.js",
+    "types": "dist/BlueIO.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/BlueIO.js",
+            "types": "./dist/BlueIO.d.ts"
+        }
+    },
+    "dependencies": {
+        "serialport": "^13.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^25.6.0",
+        "tsx": "^4.21.0",
+        "typescript": "^6.0.3"
+    }
+}
