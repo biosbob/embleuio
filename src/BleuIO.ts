@@ -10,6 +10,13 @@ interface CommandOptions {
     onTimeout?: (lines: string[]) => Promise<string[]>
 }
 
+export enum AdvMode {
+    NON_CONNECTABLE = 0,
+    CONNECTABLE_UNDIRECTED = 1,
+    CONNECTABLE_DIRECTED = 2,
+    CONNECTABLE_DIRECTED_LOW_DUTY = 3
+}
+
 export interface ScanHit {
     index: number
     addrType: number
@@ -24,9 +31,11 @@ export interface ScanUntilOptions {
 }
 
 export interface AdvStartOptions {
-    mode?: number
+    mode?: AdvMode
     intervalMs?: number
     durationSec?: number
+    name?: string
+    clear?: boolean
 }
 
 export class BleuIO {
@@ -44,23 +53,59 @@ export class BleuIO {
         this.attach(port)
     }
 
-    private attach(port: SerialPort & EventEmitter) {
-        port.on('data', d => this.accept(d.toString('utf8')))
-    }
-
     static async open(path: string, baudRate = 57600): Promise<BleuIO> {
         const port = new SerialPort({ path, baudRate, autoOpen: false }) as SerialPort & EventEmitter
 
-        await new Promise<void>((res, rej) => {
-            port.open(err => err ? rej(err) : res())
+        await new Promise<void>((resolve, reject) => {
+            port.open(err => err ? reject(err) : resolve())
         })
 
-        await new Promise(r => setTimeout(r, 200))
+        await new Promise(resolve => setTimeout(resolve, 200))
+
         return new BleuIO(path, baudRate, port)
     }
 
+    static parseScanHit(line: string): ScanHit | null {
+        const m = line.match(/^\[(\d+)\] Device: \[(\d+)\]([0-9A-F:]{17})\s+RSSI:\s+(-?\d+)(?:\s+\((.*)\))?$/i)
+
+        if (!m) {
+            return null
+        }
+
+        return {
+            index: Number(m[1]),
+            addrType: Number(m[2]),
+            address: m[3].toUpperCase(),
+            rssi: Number(m[4]),
+            name: m[5]
+        }
+    }
+
+    async close(): Promise<void> {
+        try {
+            if (this.port.isOpen) {
+                try {
+                    await this.stop()
+                } catch { }
+
+                await new Promise<void>((resolve, reject) => {
+                    this.port.drain(err => err ? reject(err) : resolve())
+                })
+
+                await new Promise<void>((resolve, reject) => {
+                    this.port.close(err => err ? reject(err) : resolve())
+                })
+            }
+        }
+        finally {
+            await this.delay(300)
+        }
+    }
+
     async reset(): Promise<void> {
-        if (this.port.isOpen) await this.close()
+        if (this.port.isOpen) {
+            await this.close()
+        }
 
         await this.delay(300)
 
@@ -70,8 +115,8 @@ export class BleuIO {
             autoOpen: false
         }) as SerialPort & EventEmitter
 
-        await new Promise<void>((res, rej) => {
-            port.open(err => err ? rej(err) : res())
+        await new Promise<void>((resolve, reject) => {
+            port.open(err => err ? reject(err) : resolve())
         })
 
         await this.delay(200)
@@ -83,48 +128,57 @@ export class BleuIO {
         this.pending = Promise.resolve()
     }
 
-    async close(): Promise<void> {
-        try {
-            if (this.port.isOpen) {
-                try {
-                    await this.write('\x03', false)
-                    await this.delay(100)
-                } catch { }
-
-                await new Promise<void>((res, rej) => {
-                    this.port.drain(err => err ? rej(err) : res())
-                })
-
-                await new Promise<void>((res, rej) => {
-                    this.port.close(err => err ? rej(err) : res())
-                })
-            }
-        } finally {
-            await this.delay(300)
-        }
-    }
-
-    async startCentral(): Promise<void> {
+    async setCentral(): Promise<void> {
         await this.reset()
-
-        try {
-            await this.write('\x03', false)
-            await this.delay(150)
-        } catch { }
-
+        await this.clearState()
         await this.ate(false)
         await this.at_central()
     }
 
-    async startPeripheral(name?: string): Promise<void> {
+    async setPeripheral(opts?: { name?: string }): Promise<void> {
         await this.reset()
+        await this.clearState()
         await this.ate(false)
         await this.at_peripheral()
-        if (name) await this.at_devicename(name)
+
+        if (opts?.name) {
+            await this.at_devicename(opts.name)
+        }
+    }
+
+    async startCentral(): Promise<void> {
+        await this.setCentral()
+    }
+
+    async startPeripheral(name?: string): Promise<void> {
+        await this.setPeripheral({ name })
+    }
+
+    async startAdvertising(opts: AdvStartOptions = {}): Promise<void> {
+        const clear = opts.clear ?? true
+
+        if (clear) {
+            await this.at_advstop()
+            await this.at_advresp('')
+            await this.at_advdata('')
+        }
+
+        if (opts.name) {
+            await this.at_advresp(this.nameScanResponse(opts.name))
+        }
+
+        await this.at_advstart(opts)
+    }
+
+    async stopAdvertising(): Promise<void> {
+        await this.at_advstop()
     }
 
     async stop(): Promise<void> {
-        if (!this.port.isOpen) return
+        if (!this.port.isOpen) {
+            return
+        }
+
         try {
             await this.write('\x03', false)
             await this.delay(100)
@@ -136,47 +190,53 @@ export class BleuIO {
 
         return this.cmd({
             text: `ATE${enabled ? 1 : 0}`,
-            done: l => l.includes(expect) || l.includes('OK'),
+            done: lines => lines.includes(expect) || lines.includes('OK'),
             timeoutMs: 500,
-            onTimeout: async l => l
+            onTimeout: async lines => lines
         })
     }
 
     async at_central(): Promise<string[]> {
-        return this.cmd({
-            text: 'AT+CENTRAL',
-            done: l => l.includes('OK') || l.includes('ERROR'),
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
+        return this.cmdOk('AT+CENTRAL')
     }
 
     async at_peripheral(): Promise<string[]> {
-        return this.cmd({
-            text: 'AT+PERIPHERAL',
-            done: l => l.includes('OK') || l.includes('ERROR'),
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
+        return this.cmdOk('AT+PERIPHERAL')
     }
 
     async at_devicename(name?: string): Promise<string[]> {
-        return this.cmd({
-            text: name ? `AT+DEVICENAME=${name}` : 'AT+DEVICENAME',
-            done: l => l.some(x => x.trim().length > 0),
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
+        return this.cmdAny(name ? `AT+DEVICENAME=${name}` : 'AT+DEVICENAME')
+    }
+
+    async at_advdata(data?: string): Promise<string[]> {
+        return this.cmdAny(data === undefined ? 'AT+ADVDATA' : `AT+ADVDATA=${data}`)
+    }
+
+    async at_advresp(data?: string): Promise<string[]> {
+        return this.cmdAny(data === undefined ? 'AT+ADVRESP' : `AT+ADVRESP=${data}`)
+    }
+
+    async at_advstart(opts: AdvStartOptions = {}): Promise<string[]> {
+        const mode = opts.mode ?? AdvMode.CONNECTABLE_UNDIRECTED
+        const intervalMs = opts.intervalMs ?? 20
+        const durationSec = opts.durationSec ?? 0
+        const units = Math.round(intervalMs / 0.625)
+
+        return this.cmdAny(`AT+ADVSTART=${mode};${units};${units};${durationSec};`)
+    }
+
+    async at_advstop(): Promise<string[]> {
+        return this.cmdAny('AT+ADVSTOP')
     }
 
     async at_gapscan(seconds = 1): Promise<string[]> {
         return this.cmd({
             text: `AT+GAPSCAN=${seconds}`,
-            done: l => l.some(x => x.includes('SCAN COMPLETE')),
+            done: lines => lines.some(line => line.includes('SCAN COMPLETE')),
             timeoutMs: (seconds + 2) * 1000,
-            onTimeout: async l => {
+            onTimeout: async lines => {
                 await this.stop()
-                return l
+                return lines
             }
         })
     }
@@ -184,128 +244,192 @@ export class BleuIO {
     async scanUntilAddress(address: string, opts: ScanUntilOptions = {}): Promise<ScanHit> {
         const target = address.toUpperCase()
         const scanSeconds = opts.scanSeconds ?? 3
-        const timeoutMs = opts.timeoutMs ?? (scanSeconds + 2) * 1000
+        const timeoutMs = opts.timeoutMs ?? ((scanSeconds + 2) * 1000)
 
-        return new Promise<ScanHit>((resolve, reject) => {
-            const timer = setTimeout(() => {
+        return this.cmdScanUntil({
+            text: `AT+GAPSCAN=${scanSeconds}`,
+            timeoutMs,
+            match: line => {
+                const hit = BleuIO.parseScanHit(line)
+                return hit && hit.address === target ? hit : null
+            }
+        })
+    }
+
+    private async clearState(): Promise<void> {
+        try {
+            await this.stop()
+            await this.delay(150)
+        } catch { }
+    }
+
+    private async cmdOk(text: string): Promise<string[]> {
+        return this.cmd({
+            text,
+            done: lines => lines.includes('OK') || lines.includes('ERROR'),
+            timeoutMs: 1000,
+            onTimeout: async lines => lines
+        })
+    }
+
+    private async cmdAny(text: string): Promise<string[]> {
+        return this.cmd({
+            text,
+            done: lines => lines.some(line => line.trim().length > 0),
+            timeoutMs: 1000,
+            onTimeout: async lines => lines
+        })
+    }
+
+    private async cmd(opts: CommandOptions): Promise<string[]> {
+        const run = async () => this.runCommand(opts)
+
+        const result = this.pending.then(run, run)
+        this.pending = result.then(() => { }, () => { })
+
+        return result
+    }
+
+    private async runCommand(opts: CommandOptions): Promise<string[]> {
+        this.lines = []
+
+        return new Promise<string[]>((resolve, reject) => {
+            const timeout = setTimeout(() => {
                 cleanup()
-                reject(new Error('scanUntil timeout'))
-            }, timeoutMs)
+
+                if (opts.onTimeout) {
+                    opts.onTimeout([...this.lines]).then(resolve, reject)
+                }
+                else {
+                    reject(new Error(`Timeout waiting for response to ${opts.text}`))
+                }
+            }, opts.timeoutMs ?? 2000)
 
             const onLine = (line: string) => {
-                const hit = BleuIO.parseScanHit(line)
-                if (hit && hit.address === target) {
+                if (opts.done(this.lines, line)) {
                     cleanup()
-                    this.stop().then(() => resolve(hit)).catch(reject)
+                    resolve([...this.lines])
                 }
             }
 
             const cleanup = () => {
-                clearTimeout(timer)
+                clearTimeout(timeout)
                 this.port.off('bleuio-line', onLine)
             }
 
             this.port.on('bleuio-line', onLine)
-            this.write(`AT+GAPSCAN=${scanSeconds}`, true).catch(reject)
-        })
-    }
 
-    async at_advstart(opts: AdvStartOptions = {}): Promise<string[]> {
-        const mode = opts.mode ?? 1
-        const intervalMs = opts.intervalMs ?? 20
-        const durationSec = opts.durationSec ?? 0
-        const units = Math.round(intervalMs / 0.625)
-
-        return this.cmd({
-            text: `AT+ADVSTART=${mode};${units};${units};${durationSec};`,
-            done: l => l.some(x => x.trim().length > 0),
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
-    }
-
-    async at_advstop(): Promise<string[]> {
-        return this.cmd({
-            text: 'AT+ADVSTOP',
-            done: l => l.some(x => x.trim().length > 0),
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
-    }
-
-    static parseScanHit(line: string): ScanHit | null {
-        const m = line.match(/^\[(\d+)\] Device: \[(\d+)\]([0-9A-F:]{17})\s+RSSI:\s+(-?\d+)(?:\s+\((.*)\))?$/i)
-        if (!m) return null
-
-        return {
-            index: +m[1],
-            addrType: +m[2],
-            address: m[3].toUpperCase(),
-            rssi: +m[4],
-            name: m[5]
-        }
-    }
-
-    private async cmd(opts: CommandOptions): Promise<string[]> {
-        const run = async () => {
-            this.lines = []
-
-            return new Promise<string[]>((resolve, reject) => {
-                const t = setTimeout(() => {
-                    cleanup()
-                    opts.onTimeout ? opts.onTimeout([...this.lines]).then(resolve, reject)
-                        : reject(new Error(`Timeout ${opts.text}`))
-                }, opts.timeoutMs ?? 2000)
-
-                const onLine = (line: string) => {
-                    if (opts.done(this.lines, line)) {
-                        cleanup()
-                        resolve([...this.lines])
-                    }
-                }
-
-                const cleanup = () => {
-                    clearTimeout(t)
-                    this.port.off('bleuio-line', onLine)
-                }
-
-                this.port.on('bleuio-line', onLine)
-                this.write(opts.text, true).catch(reject)
+            this.write(opts.text, true).catch(err => {
+                cleanup()
+                reject(err)
             })
-        }
+        })
+    }
 
-        const r = this.pending.then(run, run)
-        this.pending = r.then(() => { }, () => { })
-        return r
+    private async cmdScanUntil(opts: {
+        text: string
+        timeoutMs: number
+        match: (line: string) => ScanHit | null
+    }): Promise<ScanHit> {
+        const run = async () => this.runScanUntil(opts)
+
+        const result = this.pending.then(run, run)
+        this.pending = result.then(() => { }, () => { })
+
+        return result
+    }
+
+    private async runScanUntil(opts: {
+        text: string
+        timeoutMs: number
+        match: (line: string) => ScanHit | null
+    }): Promise<ScanHit> {
+        this.lines = []
+
+        return new Promise<ScanHit>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                cleanup()
+                reject(new Error(`Timeout waiting for scan hit from ${opts.text}`))
+            }, opts.timeoutMs)
+
+            const cleanup = () => {
+                clearTimeout(timeout)
+                this.port.off('bleuio-line', onLine)
+            }
+
+            const onLine = (line: string) => {
+                const hit = opts.match(line)
+
+                if (hit) {
+                    cleanup()
+
+                    this.stop()
+                        .then(() => resolve(hit))
+                        .catch(reject)
+                }
+            }
+
+            this.port.on('bleuio-line', onLine)
+
+            this.write(opts.text, true).catch(err => {
+                cleanup()
+                reject(err)
+            })
+        })
     }
 
     private async write(text: string, cr = true): Promise<void> {
-        if (!this.port.isOpen) return
+        if (!this.port.isOpen) {
+            return
+        }
 
-        await new Promise<void>((res, rej) => {
+        await new Promise<void>((resolve, reject) => {
             this.port.write(cr ? `${text}\r` : text, err => {
-                if (err) return rej(err)
-                this.port.drain(err => err ? rej(err) : res())
+                if (err) {
+                    reject(err)
+                }
+                else {
+                    this.port.drain(err => err ? reject(err) : resolve())
+                }
             })
         })
     }
 
-    private accept(text: string) {
+    private attach(port: SerialPort & EventEmitter): void {
+        port.on('data', data => {
+            this.accept(data.toString('utf8'))
+        })
+    }
+
+    private accept(text: string): void {
         this.buffer += text
 
         for (; ;) {
-            const i = this.buffer.indexOf('\r\n')
-            if (i < 0) break
+            const ix = this.buffer.indexOf('\r\n')
 
-            const line = this.buffer.slice(0, i)
-            this.buffer = this.buffer.slice(i + 2)
+            if (ix < 0) {
+                break
+            }
+
+            const line = this.buffer.slice(0, ix)
+            this.buffer = this.buffer.slice(ix + 2)
 
             this.lines.push(line)
             this.port.emit('bleuio-line', line)
         }
     }
 
-    private async delay(ms: number) {
-        return new Promise<void>(r => setTimeout(r, ms))
+    private nameScanResponse(name: string): string {
+        const bytes = Buffer.from(name, 'utf8')
+        const len = bytes.length + 1
+        return `${this.hexByte(len)}09${bytes.toString('hex')}`
+    }
+
+    private hexByte(value: number): string {
+        return value.toString(16).padStart(2, '0')
+    }
+
+    private async delay(ms: number): Promise<void> {
+        await new Promise<void>(resolve => setTimeout(resolve, ms))
     }
 }

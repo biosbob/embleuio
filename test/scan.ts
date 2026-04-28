@@ -4,7 +4,7 @@ async function main() {
     const dongle = await BleuIO.open('COM18')
 
     try {
-        await dongle.startCentral()
+        await dongle.setCentral()
 
         const lines = await dongle.at_gapscan(2)
         console.log(lines)
