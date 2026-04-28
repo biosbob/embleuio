@@ -164,7 +164,7 @@ export class BleuIO {
         }
 
         if (opts.name) {
-            await this.at_advresp(this.nameScanResponse(opts.name))
+            await this.at_advdata(this.nameAdvData(opts.name))
         }
 
         await this.at_advstart(opts)
@@ -419,10 +419,11 @@ export class BleuIO {
         }
     }
 
-    private nameScanResponse(name: string): string {
-        const bytes = Buffer.from(name, 'utf8')
-        const len = bytes.length + 1
-        return `${this.hexByte(len)}09${bytes.toString('hex')}`
+    private nameAdvData(name: string): string {
+        const bytes = [...Buffer.from(name, 'utf8')]
+        const data = [bytes.length + 1, 0x09, ...bytes]
+
+        return data.map(v => this.hexByte(v).toUpperCase()).join(':')
     }
 
     private hexByte(value: number): string {

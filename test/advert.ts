@@ -1,29 +1,22 @@
-// test/advert.ts
-
 import { AdvMode, BleuIO } from '../src/BleuIO'
 
 async function main() {
     const dongle = await BleuIO.open('COM19')
 
     try {
-        await dongle.setPeripheral({ name: 'BJ' })
+        await dongle.ate(false)
+        await dongle.at_peripheral()
 
-        await dongle.startAdvertising({
-            mode: AdvMode.NON_CONNECTABLE,
+        await dongle.at_advstop()
+        await dongle.at_advdata('03:09:42:4A')
+
+        await dongle.at_advstart({
+            mode: AdvMode.CONNECTABLE_UNDIRECTED,
             intervalMs: 20,
-            durationSec: 0,
-            name: 'BJ',
-            clear: true
+            durationSec: 0
         })
 
-        console.log('advertising... press Ctrl+C to stop')
-
-        process.on('SIGINT', async () => {
-            await dongle.stopAdvertising()
-            await dongle.close()
-            process.exit(0)
-        })
-
+        console.log('advertising...')
         await new Promise(() => { })
     }
     finally {
