@@ -106,10 +106,12 @@ export class BleuIO {
 
     async startCentral(): Promise<void> {
         await this.reset()
+
         try {
             await this.write('\x03', false)
             await this.delay(150)
         } catch { }
+
         await this.ate(false)
         await this.at_central()
     }
@@ -123,7 +125,6 @@ export class BleuIO {
 
     async stop(): Promise<void> {
         if (!this.port.isOpen) return
-
         try {
             await this.write('\x03', false)
             await this.delay(100)
@@ -132,6 +133,7 @@ export class BleuIO {
 
     async ate(enabled: boolean): Promise<string[]> {
         const expect = enabled ? 'ECHO ON' : 'ECHO OFF'
+
         return this.cmd({
             text: `ATE${enabled ? 1 : 0}`,
             done: l => l.includes(expect) || l.includes('OK'),
@@ -141,22 +143,37 @@ export class BleuIO {
     }
 
     async at_central(): Promise<string[]> {
-        return this.cmdAny('AT+CENTRAL')
+        return this.cmd({
+            text: 'AT+CENTRAL',
+            done: l => l.includes('OK') || l.includes('ERROR'),
+            timeoutMs: 1000,
+            onTimeout: async l => l
+        })
     }
 
     async at_peripheral(): Promise<string[]> {
-        return this.cmdAny('AT+PERIPHERAL')
+        return this.cmd({
+            text: 'AT+PERIPHERAL',
+            done: l => l.includes('OK') || l.includes('ERROR'),
+            timeoutMs: 1000,
+            onTimeout: async l => l
+        })
     }
 
     async at_devicename(name?: string): Promise<string[]> {
-        return this.cmdAny(name ? `AT+DEVICENAME=${name}` : 'AT+DEVICENAME')
+        return this.cmd({
+            text: name ? `AT+DEVICENAME=${name}` : 'AT+DEVICENAME',
+            done: l => l.some(x => x.trim().length > 0),
+            timeoutMs: 1000,
+            onTimeout: async l => l
+        })
     }
 
     async at_gapscan(seconds = 1): Promise<string[]> {
         return this.cmd({
             text: `AT+GAPSCAN=${seconds}`,
-            done: () => false,
-            timeoutMs: (seconds + 1) * 1000,
+            done: l => l.some(x => x.includes('SCAN COMPLETE')),
+            timeoutMs: (seconds + 2) * 1000,
             onTimeout: async l => {
                 await this.stop()
                 return l
@@ -199,11 +216,21 @@ export class BleuIO {
         const durationSec = opts.durationSec ?? 0
         const units = Math.round(intervalMs / 0.625)
 
-        return this.cmdAny(`AT+ADVSTART=${mode};${units};${units};${durationSec};`)
+        return this.cmd({
+            text: `AT+ADVSTART=${mode};${units};${units};${durationSec};`,
+            done: l => l.some(x => x.trim().length > 0),
+            timeoutMs: 1000,
+            onTimeout: async l => l
+        })
     }
 
     async at_advstop(): Promise<string[]> {
-        return this.cmdAny('AT+ADVSTOP')
+        return this.cmd({
+            text: 'AT+ADVSTOP',
+            done: l => l.some(x => x.trim().length > 0),
+            timeoutMs: 1000,
+            onTimeout: async l => l
+        })
     }
 
     static parseScanHit(line: string): ScanHit | null {
@@ -217,15 +244,6 @@ export class BleuIO {
             rssi: +m[4],
             name: m[5]
         }
-    }
-
-    private async cmdAny(text: string): Promise<string[]> {
-        return this.cmd({
-            text,
-            done: l => l.length > 0,
-            timeoutMs: 1000,
-            onTimeout: async l => l
-        })
     }
 
     private async cmd(opts: CommandOptions): Promise<string[]> {
