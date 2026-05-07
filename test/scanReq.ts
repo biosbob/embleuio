@@ -1,29 +1,31 @@
-// test/scanUntil.ts
+// test/scanReq.ts
 
 import { BleuIO } from '../src/BleuIO'
 
-const DON_ADDR = '40:48:FD:EB:AA:5D'
 const EMS_ADDR = 'AA:AA:AA:AA:AA:AA'
-
-const ADDR = EMS_ADDR
 
 async function main() {
     const central = await BleuIO.open('COM18')
 
     try {
-        await central.ate(false)
-        await central.at_central()
+        await central.setCentral()
+
+        console.log(await central.at_scanparam({
+            scanMode: 2,
+            scanType: 0,
+            intervalMs: 100,
+            windowMs: 100,
+            filterDuplicates: false
+        }))
 
         const t0 = Date.now()
 
-        const hit = await central.scanUntilAddress(ADDR, {
+        const hit = await central.scanUntilAddress(EMS_ADDR, {
             scanSeconds: 3
         })
 
-        const dt = Date.now() - t0
-
         console.log('hit:', hit)
-        console.log(`time(ms): ${dt}`)
+        console.log(`time(ms): ${Date.now() - t0}`)
     }
     finally {
         await central.close()

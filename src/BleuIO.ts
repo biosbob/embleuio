@@ -30,6 +30,14 @@ export interface ScanUntilOptions {
     timeoutMs?: number
 }
 
+export interface ScanParamOptions {
+    scanMode?: number
+    scanType?: number
+    intervalMs?: number
+    windowMs?: number
+    filterDuplicates?: boolean
+}
+
 export interface AdvStartOptions {
     mode?: AdvMode
     intervalMs?: number
@@ -206,6 +214,20 @@ export class BleuIO {
 
     async at_devicename(name?: string): Promise<string[]> {
         return this.cmdAny(name ? `AT+DEVICENAME=${name}` : 'AT+DEVICENAME')
+    }
+
+    async at_scanparam(opts?: ScanParamOptions): Promise<string[]> {
+        if (!opts) {
+            return this.cmdAny('AT+SCANPARAM')
+        }
+
+        const scanMode = opts.scanMode ?? 2
+        const scanType = opts.scanType ?? 0
+        const intervalMs = opts.intervalMs ?? 100
+        const windowMs = opts.windowMs ?? intervalMs
+        const filterDuplicates = opts.filterDuplicates ? 1 : 0
+
+        return this.cmdOk(`AT+SCANPARAM=${scanMode}=${scanType}=${intervalMs}=${windowMs}=${filterDuplicates}`)
     }
 
     async at_advdata(data?: string): Promise<string[]> {
