@@ -93,13 +93,14 @@ export class BleuIO {
         try {
             if (this.port.isOpen) {
                 try {
+                    await this.at_cancelconnect()
+                } catch { }
+                try {
                     await this.stop()
                 } catch { }
-
                 await new Promise<void>((resolve, reject) => {
                     this.port.drain(err => err ? reject(err) : resolve())
                 })
-
                 await new Promise<void>((resolve, reject) => {
                     this.port.close(err => err ? reject(err) : resolve())
                 })
@@ -204,6 +205,10 @@ export class BleuIO {
         })
     }
 
+    async at_cancelconnect(): Promise<string[]> {
+        return this.cmdOk('AT+CANCELCONNECT')
+    }
+
     async at_central(): Promise<string[]> {
         return this.cmdOk('AT+CENTRAL')
     }
@@ -253,15 +258,20 @@ export class BleuIO {
             text: `AT+GAPCONNECT=${address}`,
             done: lines =>
                 lines.some(line => line.includes('Connection failed to be established')) ||
+                lines.some(line => line.includes('Run AT+CANCELCONNECT')) ||
                 lines.includes('DISCONNECTED') ||
                 lines.includes('ERROR'),
             timeoutMs,
             onTimeout: async lines => lines
         })
 
-        if (lines.some(line => line.includes('Connection failed to be established'))) {
+        try {
+            await this.at_cancelconnect()
+        } catch { }
+
+        try {
             await this.stop()
-        }
+        } catch { }
 
         return lines
     }
