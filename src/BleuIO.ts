@@ -230,6 +230,42 @@ export class BleuIO {
         return this.cmdOk(`AT+SCANPARAM=${scanMode}=${scanType}=${intervalMs}=${windowMs}=${filterDuplicates}`)
     }
 
+    async at_gapconnect(address: string, timeoutMs = 5000): Promise<string[]> {
+        return this.cmd({
+            text: `AT+GAPCONNECT=${address}`,
+            done: lines => lines.includes('CONNECTED') || lines.includes('DISCONNECTED') || lines.includes('ERROR'),
+            timeoutMs,
+            onTimeout: async lines => lines
+        })
+    }
+
+    async at_gapdisconnect(): Promise<string[]> {
+        return this.cmdOk('AT+GAPDISCONNECT')
+    }
+
+    async connectAddress(address: string, timeoutMs = 5000): Promise<string[]> {
+        await this.setCentral()
+        return this.at_gapconnect(address, timeoutMs)
+    }
+
+    async connectOnce(address: string, timeoutMs = 5000): Promise<string[]> {
+        const lines = await this.cmd({
+            text: `AT+GAPCONNECT=${address}`,
+            done: lines =>
+                lines.some(line => line.includes('Connection failed to be established')) ||
+                lines.includes('DISCONNECTED') ||
+                lines.includes('ERROR'),
+            timeoutMs,
+            onTimeout: async lines => lines
+        })
+
+        if (lines.some(line => line.includes('Connection failed to be established'))) {
+            await this.stop()
+        }
+
+        return lines
+    }
+
     async at_advdata(data?: string): Promise<string[]> {
         return this.cmdAny(data === undefined ? 'AT+ADVDATA' : `AT+ADVDATA=${data}`)
     }
